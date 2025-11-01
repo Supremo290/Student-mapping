@@ -1,0 +1,102 @@
+<!-- FORM SECTION -->
+<form style="background: #f9f9f9; padding: 20px; border-radius: 8px; margin-bottom: 20px; box-shadow: 0 2px 5px rgba(0,0,0,0.1);">
+  <div style="display: flex; align-items: center; flex-wrap: wrap; gap: 30px;">
+    <!-- TERM & SCHOOL YEAR -->
+    <div style="display: flex; align-items: center;">
+      <label style="width: 160px; font-weight: 600; color: #0D47A1;">Term & School Year:</label>
+      <mat-form-field appearance="outline" style="width: 250px;">
+        <mat-label>Select Term & School Year</mat-label>
+        <mat-select [(ngModel)]="activeTerm" name="activeTerm" (selectionChange)="selectTermYear()">
+          <mat-option *ngFor="let item of combinedOptions" [value]="item.value">
+            {{ item.label }}
+          </mat-option>
+        </mat-select>
+      </mat-form-field>
+    </div>
+
+    <!-- DATE PICKER -->
+    <div style="display: flex; align-items: center;">
+      <label style="width: 120px; font-weight: 600; color: #0D47A1;">Select Date:</label>
+      <mat-form-field appearance="outline" style="width: 200px;">
+        <mat-label>Pick a date</mat-label>
+        <input matInput [matDatepicker]="picker" (dateChange)="onDateSelect($event)" [disabled]="!activeTerm">
+        <mat-datepicker-toggle matSuffix [for]="picker"></mat-datepicker-toggle>
+        <mat-datepicker #picker></mat-datepicker>
+      </mat-form-field>
+    </div>
+  </div>
+</form>
+
+<!-- DISPLAY SELECTED DATES -->
+<div *ngIf="selectedDates.length > 0" style="margin-bottom: 20px;">
+  <h3 style="color:#1565C0; margin-bottom: 10px;">Selected Dates:</h3>
+  <div style="display: flex; flex-wrap: wrap; gap: 10px;">
+    <div *ngFor="let day of selectedDates; let i = index" 
+         style="background: #E3F2FD; border: 1px solid #90CAF9; border-radius: 25px; padding: 6px 14px; display: flex; align-items: center; gap: 8px;">
+      <span style="font-weight: 500;">Day {{ i + 1 }}</span>
+      <span style="font-size: 13px; color: #1976D2;">{{ day | date:'MMM d, y' }}</span>
+      <button mat-icon-button color="warn" (click)="removeDate(day)" style="transform: scale(0.9);">
+        <mat-icon>close</mat-icon>
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- TABLE SECTION WITH TABS -->
+<div class="p-4" *ngIf="activeTerm && selectedDates.length > 0 && programs.length > 0" style="background:#fff; border-radius:8px; box-shadow:0 3px 6px rgba(0,0,0,0.1);">
+  <h2 style="color:#0D47A1; font-weight:600; margin-bottom: 15px;">Schedule Mapping</h2>
+
+  <mat-tab-group>
+    <mat-tab *ngFor="let day of selectedDates; let i = index" [label]="'Day ' + (i + 1)">
+      <div style="margin-top: 20px; overflow-x: auto;">
+        <h3 style="color:#1565C0;">Schedule for {{ day | date:'fullDate' }}</h3>
+
+        <table border="1" cellspacing="0" cellpadding="8"
+               style="width:100%; border-collapse: collapse; text-align: left;">
+          <thead style="background-color: #1565C0; color: white;">
+            <tr>
+              <th>Program (Year)</th>
+              <th *ngFor="let slot of timeSlots">{{ slot }}</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr *ngFor="let prog of programs">
+              <td>
+                <b>{{ prog.program }}</b> - Year {{ prog.year }}
+                <br>
+                <small [style.color]="getRemainingSubjectsForDay(prog, day) === 0 ? 'green' : 'green'">
+                  Remaining: {{ getRemainingSubjectsForDay(prog, day) }}
+                </small>
+              </td>
+
+              <td *ngFor="let slot of timeSlots">
+                <!-- fullSlot is day_slot so each day has its own slot key -->
+                <select
+                  [(ngModel)]="prog.schedule[day + '_' + slot]"
+                  (focus)="capturePrev(prog, day + '_' + slot)"
+                  (change)="onSubjectSelect(prog, slot, day)"
+                  style="width: 160px; padding: 5px;"
+                >
+                  <option value=""></option>
+                  <option *ngFor="let subj of getAvailableSubjects(prog, day + '_' + slot)" [value]="subj.subjectId">
+                    {{ subj.subjectId }} - {{ subj.subjectTitle }}
+                  </option>
+                </select>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </mat-tab>
+  </mat-tab-group>
+
+  <div style="text-align:center; margin-top: 20px;">
+    <button mat-raised-button color="primary" (click)="saveSchedule()" style="padding: 10px 25px;">
+      <mat-icon>save</mat-icon> Save Schedule
+    </button>
+  </div>
+</div>
+
+<ng-template #noData>
+  <p class="text-center">No programs to display.</p>
+</ng-template>
