@@ -1,0 +1,37 @@
+<h2 mat-dialog-title>Select Exam Dates</h2>
+
+<mat-dialog-content>
+  <div *ngFor="let day of examDays; let i = index" class="exam-day">
+    <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px;">
+      
+      <mat-form-field appearance="outline" style="width: 200px;">
+        <mat-label>Exam Date {{ i + 1 }}</mat-label>
+        <input 
+          matInput 
+          [matDatepicker]="picker" 
+          [(ngModel)]="day.date"
+          [matDatepickerFilter]="dateFilter">
+        <mat-datepicker-toggle matSuffix [for]="picker"></mat-datepicker-toggle>
+        <mat-datepicker #picker></mat-datepicker>
+      </mat-form-field>
+
+      <mat-checkbox [(ngModel)]="day.am">AM</mat-checkbox>
+      <mat-checkbox [(ngModel)]="day.pm">PM</mat-checkbox>
+
+      <button *ngIf="examDays.length > 1" mat-icon-button color="warn" (click)="removeDay(i)">
+        <mat-icon>delete</mat-icon>
+      </button>
+    </div>
+  </div>
+
+  <div style="text-align: center; margin-top: 10px;">
+    <button mat-stroked-button color="primary" (click)="addDay()" [disabled]="examDays.length >= maxDays">
+      <mat-icon>add</mat-icon> Add Day
+    </button>
+  </div>
+</mat-dialog-content>
+
+<mat-dialog-actions align="end">
+  <button mat-button (click)="cancel()">Cancel</button>
+  <button mat-raised-button color="primary" (click)="save()">Save</button>
+</mat-dialog-actions>

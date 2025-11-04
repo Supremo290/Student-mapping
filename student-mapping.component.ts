@@ -1,9 +1,11 @@
-import { Component, OnInit } from '@angular/core';
+import { ChangeDetectorRef, Component, OnInit } from '@angular/core';
 import { ApiService } from '../api.service';
 import { GlobalService } from '../global.service';
 import { map } from 'rxjs/operators';
 import Swal from 'sweetalert2';
 import { SubjectGroup, DepartmentGroup, ProgramSchedule } from '../subject-code';
+import { MatDialog } from '@angular/material';
+import { DatePickerComponent } from '../date-picker/date-picker.component';
 
 @Component({
   selector: 'app-student-mapping',
@@ -15,11 +17,7 @@ export class StudentMappingComponent implements OnInit {
   rawCodes: any[] = [];
   codes: any[] = [];
   subjectId: string;
-
-  // master list containing ALL programs (including SAS) — used for logic
   programsAll: ProgramSchedule[] = [];
-
-  // displayed list (filtered, excludes SAS) — bound to the template
   programs: ProgramSchedule[] = [];
 
   activeTerm: string;
@@ -27,12 +25,15 @@ export class StudentMappingComponent implements OnInit {
   selectedDates: string[] = [];
   daysWithTimeSlots: { [day: string]: string[] } = {};
 
-  timeSlots: string[] = [
-    '7:30 AM-9:00 AM', '9:00 AM-10:30 AM', '10:30 AM-12:00 PM', '12:00 PM-1:30 PM',
-    '1:30 PM-3:00 PM', '3:00 PM-4:30 PM', '4:30 PM-6:00 PM', '6:00 PM-7:30 PM'
-  ];
-  displayedColumns: string[] = ['program', ...this.timeSlots];
+  showTable = false; // ✅ Table visibility after "Next"
 
+  timeSlots: string[] = [
+    '7:30 AM - 9:00 AM', '9:00 AM - 10:30 AM', '10:30 AM - 12:00 PM',
+    '12:00 PM - 1:30 PM', '1:30 PM - 3:00 PM', '3:00 PM - 4:30 PM',
+    '4:30 PM - 6:00 PM', '6:00 PM - 7:30 PM'
+  ];
+
+  displayedColumns: string[] = ['program', ...this.timeSlots];
   termOptions = [
     { key: 1, value: '1st Term' },
     { key: 2, value: '2nd Term' },
@@ -42,13 +43,10 @@ export class StudentMappingComponent implements OnInit {
   combinedOptions: { label: string, value: string }[] = [];
   departments: DepartmentGroup[] = [];
   swal = Swal;
-
-  // store previous selection for a fullSlot (day_slot) before the user changes it
   prevSelection: { [fullSlot: string]: string } = {};
-
   selectedScheduleOutput: any[] = [];
 
-  constructor(public api: ApiService, public global: GlobalService) {}
+  constructor(public api: ApiService, public global: GlobalService, private dialog: MatDialog) {}
 
   ngOnInit() {
     this.combineYearTerm();
@@ -58,59 +56,12 @@ export class StudentMappingComponent implements OnInit {
     const currentYear = new Date().getFullYear();
     for (let y = currentYear - 1; y <= currentYear + 1; y++) {
       const nextYear = y + 1;
-      for (let i = 0; i < this.termOptions.length; i++) {
-        const t = this.termOptions[i];
+      for (const t of this.termOptions) {
         const label = `${t.value} ${y}-${nextYear}`;
         const value = `${y}${nextYear.toString().slice(-2)}${t.key}`;
-        this.combinedOptions.push({ label: label, value: value });
+        this.combinedOptions.push({ label, value });
       }
     }
-  }
-
-  // DATE PICKER handler
-  onDateSelect(event: any) {
-    if (!event || !event.value) return;
-    const selected = event.value.toLocaleDateString('en-CA'); // yyyy-mm-dd
-    if (!this.selectedDates.includes(selected)) {
-      this.selectedDates.push(selected);
-      this.daysWithTimeSlots[selected] = [...this.timeSlots];
-
-      // initialize keys on programsAll for this date
-      const prefix = selected + '_';
-      for (let i = 0; i < this.programsAll.length; i++) {
-        const p = this.programsAll[i];
-        if (!p.schedule) p.schedule = {};
-        for (let j = 0; j < this.timeSlots.length; j++) {
-          const full = prefix + this.timeSlots[j];
-          if (typeof p.schedule[full] === 'undefined') p.schedule[full] = '';
-        }
-      }
-
-      // refresh displayed list (SAS filter)
-      this.programs = this.programsAll.filter(function(p) { return !(p.dept && p.dept.toUpperCase() === 'SAS'); });
-      this.updateSelectedScheduleOutput();
-      // update counters for the new date
-      this.updateRemainingSubjectsForAll(selected);
-    }
-  }
-
-  removeDate(day: string) {
-    this.selectedDates = this.selectedDates.filter(d => d !== day);
-    delete this.daysWithTimeSlots[day];
-    // Also remove any schedule keys for this day in programsAll
-    const prefix = day + '_';
-    for (const p of this.programsAll) {
-      if (p.schedule) {
-        const keys = Object.keys(p.schedule);
-        for (let k = 0; k < keys.length; k++) {
-          const key = keys[k];
-          if (key.indexOf(prefix) === 0) delete p.schedule[key];
-        }
-      }
-    }
-    // Refresh displayed list
-    this.programs = this.programsAll.filter(function(p) { return !(p.dept && p.dept.toUpperCase() === 'SAS'); });
-    this.updateSelectedScheduleOutput();
   }
 
   selectTermYear() {
@@ -118,48 +69,41 @@ export class StudentMappingComponent implements OnInit {
       this.global.swalAlertError("Please select term");
       return;
     }
+    this.showTable = false;
+    this.selectedDates = [];
+    console.log("Selected Term Code:", this.activeTerm);
     this.loadSwal();
     this.getCodeSummaryReport(this.activeTerm);
-    console.log('Selected term-year value:', this.activeTerm);
   }
 
   getCodeSummaryReport(sy) {
     this.api.getCodeSummaryReport(sy)
-      .map(function(response: any) { return response.json(); })
+      .map((response: any) => response.json())
       .subscribe(
         res => {
           this.rawCodes = res.data;
           Swal.close();
+
           this.codes = this.getUniqueSubjectIds(res.data);
+          this.programsAll = this.getUniqueProgramsAll(res.data);
+          this.programs = this.programsAll.filter(p => !(p.dept && p.dept.toUpperCase() === 'SAS'));
 
-          // build master list and displayed (filtered) list
-          const allPrograms = this.getUniqueProgramsAll(res.data);
-          this.programsAll = allPrograms;                         // master list
-          this.programs = this.programsAll.filter(function(p) {   // displayed list (exclude SAS)
-            return !(p.dept && p.dept.toUpperCase() === 'SAS');
-          });
-
-          // ensure schedule map initialized (flat keys like "yyyy-mm-dd_7:30 AM-9:00 AM")
-          // don't pre-create all date_slot keys — create when date is added
-          for (let i = 0; i < this.programsAll.length; i++) {
-            const p = this.programsAll[i];
+          for (const p of this.programsAll) {
             if (!p.schedule) p.schedule = {};
             p.remainingSubjects = this.getRemainingSubjects(p);
           }
 
           this.updateSelectedScheduleOutput();
+          console.log("Programs Loaded:", this.programsAll);
         },
-        err => {
-          this.global.swalAlertError(err);
-        }
+        err => this.global.swalAlertError(err)
       );
   }
 
   getUniqueSubjectIds(data: any[]): SubjectGroup[] {
     const groupedID: SubjectGroup[] = [];
-    for (let i = 0; i < data.length; i++) {
-      const item = data[i];
-      const existing = groupedID.find(function(s) { return s.subjectId === item.subjectId; });
+    for (const item of data) {
+      const existing = groupedID.find(s => s.subjectId === item.subjectId);
       if (existing) {
         existing.codes.push({
           codeNo: item.codeNo,
@@ -171,13 +115,14 @@ export class StudentMappingComponent implements OnInit {
         groupedID.push({
           subjectId: item.subjectId,
           subjectTitle: item.subjectTitle,
+          units: Number(item.lecUnits) || 0,
           codes: [{
             codeNo: item.codeNo,
             course: item.course,
             year: item.yearLevel,
             dept: item.dept
           }]
-        });
+        } as any);
       }
     }
     return groupedID;
@@ -185,22 +130,16 @@ export class StudentMappingComponent implements OnInit {
 
   getUniqueProgramsAll(data: any[]): ProgramSchedule[] {
     const groupedProg: ProgramSchedule[] = [];
-    for (let i = 0; i < data.length; i++) {
-      const item = data[i];
-      const existingProgram = groupedProg.find(function(p) {
-        return p.program === item.course && p.year === item.yearLevel;
-      });
-
+    for (const item of data) {
+      const existingProgram = groupedProg.find(p => p.program === item.course && p.year === item.yearLevel);
       const subjectData = {
         subjectId: item.subjectId,
         subjectTitle: item.subjectTitle,
-        codeNo: item.codeNo
+        codeNo: item.codeNo,
+        units: Number(item.lecUnits) || 0
       };
-
       if (existingProgram) {
-        const exists = existingProgram.subjects.find(function(s) {
-          return s.subjectId === subjectData.subjectId;
-        });
+        const exists = existingProgram.subjects.find(s => s.subjectId === subjectData.subjectId);
         if (!exists) existingProgram.subjects.push(subjectData);
       } else {
         groupedProg.push({
@@ -208,148 +147,224 @@ export class StudentMappingComponent implements OnInit {
           year: item.yearLevel,
           dept: item.dept,
           subjects: [subjectData],
-          schedule: {},               // flat map of "date_slot" -> subjectId
+          schedule: {},
           remainingSubjects: 0
-        });
+        } as ProgramSchedule);
       }
     }
-
-    // stable sorting
-    groupedProg.sort(function(a, b) {
-      if (a.program < b.program) return -1;
-      if (a.program > b.program) return 1;
-      return Number(a.year) - Number(b.year);
-    });
-
+    groupedProg.sort((a, b) => a.program.localeCompare(b.program) || Number(a.year) - Number(b.year));
     return groupedProg;
   }
 
-  // capture previous selected value for a fullSlot (before change occurs)
   capturePrev(prog: ProgramSchedule, fullSlot: string) {
     const prev = (prog.schedule && prog.schedule[fullSlot]) ? prog.schedule[fullSlot] : '';
     this.prevSelection[fullSlot] = prev;
   }
 
-  // build global availability using programsAll so hidden SAS entries are respected
   getAvailableSubjects(prog: ProgramSchedule, fullSlot: string) {
     const selectedSubjectIds = new Set<string>();
-    for (let i = 0; i < this.programsAll.length; i++) {
-      const p = this.programsAll[i];
-      const vals = Object.values(p.schedule || {});
-      for (let j = 0; j < vals.length; j++) {
-        const v: any = vals[j];
+    for (const pAll of this.programsAll) {
+      const vals = Object.values(pAll.schedule || {});
+      for (const v of vals) {
         if (v) selectedSubjectIds.add(v);
       }
     }
-
     const currentSelected = prog.schedule && prog.schedule[fullSlot] ? prog.schedule[fullSlot] : '';
-    return prog.subjects.filter(function(subj) {
-      return !selectedSubjectIds.has(subj.subjectId) || subj.subjectId === currentSelected;
-    });
+    return prog.subjects.filter(subj => !selectedSubjectIds.has(subj.subjectId) || subj.subjectId === currentSelected);
   }
 
-  // (slot, day) -> fullSlot key
   onSubjectSelect(prog: ProgramSchedule, slot: string, day: string) {
-    const fullSlot = day + '_' + slot;
+    const fullSlot = `${day}_${slot}`;
     const selectedId = prog.schedule && prog.schedule[fullSlot] ? prog.schedule[fullSlot] : '';
 
-    // UNSELECT (user cleared select)
     if (!selectedId) {
-      // try to get previous id from prevSelection first
-      const previousSubjectId = this.prevSelection[fullSlot] || (() => {
-        // fallback: scan programsAll for any non-empty value for that fullSlot
-        for (let i = 0; i < this.programsAll.length; i++) {
-          const p = this.programsAll[i];
-          if (p.schedule && p.schedule[fullSlot]) return p.schedule[fullSlot];
-        }
-        return '';
-      })();
-
+      const previousSubjectId = this.prevSelection[fullSlot] || '';
       if (previousSubjectId) {
-        // Clear that subject across ALL programs for this fullSlot
-        for (let i = 0; i < this.programsAll.length; i++) {
-          const p = this.programsAll[i];
+        for (const p of this.programsAll) {
           if (p.schedule && p.schedule[fullSlot] === previousSubjectId) {
             p.schedule[fullSlot] = '';
           }
         }
       }
-
-      // refresh displayed programs (filter SAS)
-      this.programs = this.programsAll.filter(function(p) { return !(p.dept && p.dept.toUpperCase() === 'SAS'); });
-
-      // clear prevSelection entry
       delete this.prevSelection[fullSlot];
-
-      // update counters for this day
-      this.updateRemainingSubjectsForAll(day);
-
+      this.programs = this.programsAll.filter(p => !(p.dept && p.dept.toUpperCase() === 'SAS'));
+      this.updateRemainingSubjectsForAll();
       this.updateSelectedScheduleOutput();
       return;
     }
 
-    // PREVENT duplicate (global across programsAll)
-    for (let i = 0; i < this.programsAll.length; i++) {
-      const p = this.programsAll[i];
+    for (const p of this.programsAll) {
       const vals = Object.values(p.schedule || {});
-      for (let j = 0; j < vals.length; j++) {
-        if (vals[j] === selectedId) {
-          // if this is not the same program + same fullSlot already holding it, it's a duplicate
-          const sameProgramSameSlot = (p.program === prog.program && p.year === prog.year && p.schedule[fullSlot] === selectedId);
-          if (!sameProgramSameSlot) {
-            this.global.swalAlertError("This subject is already assigned in another slot.");
-            // rollback
-            if (prog.schedule) prog.schedule[fullSlot] = '';
-            return;
-          }
+      if (vals.includes(selectedId)) {
+        if (!(p.program === prog.program && p.year === prog.year && p.schedule[fullSlot] === selectedId)) {
+          this.global.swalAlertError("This subject is already assigned in another slot.");
+          prog.schedule[fullSlot] = '';
+          return;
         }
       }
     }
 
-    // ASSIGN to all programsAll that contain this subject
-    for (let i = 0; i < this.programsAll.length; i++) {
-      const p = this.programsAll[i];
-      const sameSubj = p.subjects.find(function(s) { return s.subjectId === selectedId; });
-      if (sameSubj) {
+    const subjectData = prog.subjects.find(s => s.subjectId === selectedId);
+    const units = subjectData && subjectData.units ? Number(subjectData.units) : 3;
+
+    for (const p of this.programsAll) {
+      if (p.subjects.find(s => s.subjectId === selectedId)) {
         if (!p.schedule) p.schedule = {};
+        const slotsForDay = this.daysWithTimeSlots[day] || [];
+        const currentIndex = slotsForDay.indexOf(slot);
+        if (currentIndex === -1) continue;
         p.schedule[fullSlot] = selectedId;
+
+        if (units === 6 && currentIndex + 1 < slotsForDay.length) {
+          const nextSlot = slotsForDay[currentIndex + 1];
+          const nextFullSlot = `${day}_${nextSlot}`;
+          p.schedule[nextFullSlot] = selectedId;
+        }
       }
     }
 
-    // refresh displayed programs (filter SAS)
-    this.programs = this.programsAll.filter(function(p) { return !(p.dept && p.dept.toUpperCase() === 'SAS'); });
-
-    // update counters for this day
-    this.updateRemainingSubjectsForAll(day);
-
+    this.programs = this.programsAll.filter(p => !(p.dept && p.dept.toUpperCase() === 'SAS'));
+    this.updateRemainingSubjectsForAll();
     this.updateSelectedScheduleOutput();
+    this.prevSelection[fullSlot] = selectedId;
   }
 
-  // recompute remainingSubjects for every displayed program for a given day
-  updateRemainingSubjectsForAll(day: string) {
-    for (let i = 0; i < this.programs.length; i++) {
-      const p = this.programs[i];
-      p.remainingSubjects = this.getRemainingSubjectsForDay(p, day);
+  // ✅ Preserve data when changing a day’s date
+  updateSelectedDates(newDates: string[]) {
+    const oldDates = this.selectedDates;
+    const oldDateMap = oldDates.reduce((map, date, index) => {
+      map[index] = date;
+      return map;
+    }, {} as { [index: number]: string });
+
+    if (newDates.length === oldDates.length) {
+      newDates.forEach((newDate, index) => {
+        const oldDate = oldDateMap[index];
+        if (oldDate && newDate !== oldDate) {
+          this.programs.forEach(prog => {
+            Object.keys(prog.schedule).forEach(key => {
+              if (key.startsWith(oldDate + '_')) {
+                const newKey = key.replace(oldDate, newDate);
+                prog.schedule[newKey] = prog.schedule[key];
+                delete prog.schedule[key];
+              }
+            });
+          });
+          if (this.daysWithTimeSlots[oldDate]) {
+            this.daysWithTimeSlots[newDate] = this.daysWithTimeSlots[oldDate];
+            delete this.daysWithTimeSlots[oldDate];
+          }
+        }
+      });
     }
+
+    this.selectedDates = newDates;
+  }
+
+  // ✅ Updated Date Picker (keeps data when date changes)
+  openExamDateDialog() {
+    const dialogRef = this.dialog.open(DatePickerComponent, {
+      width: '500px',
+      disableClose: true,
+      data: { selectedDates: this.selectedDates }
+    });
+
+    dialogRef.afterClosed().subscribe((result) => {
+      if (!result || !result.length) return;
+
+      const validResults = result.filter((r: any) => r.date);
+      if (validResults.length === 0) return;
+
+      const AM_SLOTS = ['7:30 AM - 9:00 AM', '9:00 AM - 10:30 AM', '10:30 AM - 12:00 PM'];
+      const PM_SLOTS = ['12:00 PM - 1:30 PM', '1:30 PM - 3:00 PM', '3:00 PM - 4:30 PM', '4:30 PM - 6:00 PM', '6:00 PM - 7:30 PM'];
+
+      const newDates: string[] = [];
+      validResults.forEach((r: any) => {
+        const formatted = new Date(r.date).toLocaleDateString('en-CA');
+        newDates.push(formatted);
+      });
+
+      // ✅ Preserve previous data
+      this.updateSelectedDates(newDates);
+
+      validResults.forEach((r: any) => {
+        const key = new Date(r.date).toLocaleDateString('en-CA');
+        if (r.am && r.pm) this.daysWithTimeSlots[key] = [...AM_SLOTS, ...PM_SLOTS];
+        else if (r.am) this.daysWithTimeSlots[key] = [...AM_SLOTS];
+        else if (r.pm) this.daysWithTimeSlots[key] = [...PM_SLOTS];
+      });
+
+      for (const p of this.programsAll) {
+        if (!p.schedule) p.schedule = {};
+        for (const dateStr of this.selectedDates) {
+          const slots = this.daysWithTimeSlots[dateStr] || [];
+          for (const slot of slots) {
+            const full = `${dateStr}_${slot}`;
+            if (typeof p.schedule[full] === 'undefined') p.schedule[full] = '';
+          }
+        }
+      }
+
+      this.programs = this.programsAll.filter(p => !(p.dept && p.dept.toUpperCase() === 'SAS'));
+      this.updateSelectedScheduleOutput();
+      this.updateRemainingSubjectsForAll();
+    });
+  }
+
+  goNext() {
+    if (!this.activeTerm) {
+      this.global.swalAlertError("Please select a term first!");
+      return;
+    }
+
+    if (this.selectedDates.length === 0) {
+      this.global.swalAlertError("Please select exam dates before proceeding!");
+      return;
+    }
+
+    if (this.programs.length === 0) {
+      this.global.swalAlertError("No program data loaded for this term.");
+      return;
+    }
+
+    this.showTable = true;
+  }
+
+  updateRemainingSubjectsForAll() {
+    for (const p of this.programs) {
+      p.remainingSubjects = this.getRemainingSubjectsConsideringAllDays(p);
+    }
+  }
+
+  getRemainingSubjectsConsideringAllDays(prog: ProgramSchedule): number {
+    const total = (prog.subjects || []).length;
+    const assigned = new Set<string>();
+    const keys = Object.keys(prog.schedule || {});
+    for (const key of keys) {
+      const val = prog.schedule[key];
+      if (val) assigned.add(val);
+    }
+    return total - assigned.size;
+  }
+
+  getRemainingSubjects(prog: ProgramSchedule): number {
+    const total = (prog.subjects || []).length;
+    const assignedCount = Object.values(prog.schedule || {}).filter((v: any) => v).length;
+    return total - assignedCount;
   }
 
   updateSelectedScheduleOutput() {
     this.selectedScheduleOutput = [];
-
-    // group by date (selectedDates)
-    for (let d = 0; d < this.selectedDates.length; d++) {
-      const day = this.selectedDates[d];
+    for (const day of this.selectedDates) {
       const programsForDay: any[] = [];
-      for (let i = 0; i < this.programs.length; i++) {
-        const p = this.programs[i];
+      for (const p of this.programs) {
         const subjArr: any[] = [];
         const keys = Object.keys(p.schedule || {});
-        for (let k = 0; k < keys.length; k++) {
-          const key = keys[k];
-          if (key.indexOf(day + '_') === 0) {
+        for (const key of keys) {
+          if (key.startsWith(day + '_')) {
             const subjId = p.schedule[key];
             if (subjId) {
-              const subj = p.subjects.find(function(s) { return s.subjectId === subjId; });
+              const subj = p.subjects.find(s => s.subjectId === subjId);
               subjArr.push({
                 subjectId: subj ? subj.subjectId : '',
                 subjectTitle: subj ? subj.subjectTitle : '',
@@ -363,32 +378,43 @@ export class StudentMappingComponent implements OnInit {
       }
       this.selectedScheduleOutput.push({ date: day, programs: programsForDay });
     }
-
-    console.log('Updated Output Array:', this.selectedScheduleOutput);
-  }
-
-  // Corrected: counts assigned slots for the given day (keys starting with day + '_')
-  getRemainingSubjectsForDay(prog: ProgramSchedule, day: string): number {
-    const total = (prog.subjects || []).length;
-    let assigned = 0;
-    const keys = Object.keys(prog.schedule || {});
-    for (let i = 0; i < keys.length; i++) {
-      const k = keys[i];
-      if (k.indexOf(day + '_') === 0 && prog.schedule[k]) assigned++;
-    }
-    return total - assigned;
-  }
-
-  // legacy support: returns overall remaining (for non-day contexts)
-  getRemainingSubjects(prog: ProgramSchedule): number {
-    const total = (prog.subjects || []).length;
-    const assignedCount = Object.values(prog.schedule || {}).filter(function(v: any) { return v; }).length;
-    return total - assignedCount;
   }
 
   saveSchedule() {
     console.log("Final Schedule Output:", this.selectedScheduleOutput);
     this.global.swalSuccess("Schedule saved successfully!");
+  }
+
+  removeDate(dateToRemove: string) {
+    this.swal.fire({
+      title: 'Remove Date?',
+      text: `Are you sure you want to delete ${new Date(dateToRemove).toDateString()} and all its schedules?`,
+      type: 'warning',
+      showCancelButton: true,
+      confirmButtonText: 'Yes, remove it',
+      cancelButtonText: 'Cancel'
+    })
+    .then((result) => {
+      if (!result.value) return;
+
+      this.selectedDates = this.selectedDates.filter(d => d !== dateToRemove);
+      delete this.daysWithTimeSlots[dateToRemove];
+
+      for (const p of this.programsAll) {
+        if (p.schedule) {
+          Object.keys(p.schedule)
+            .filter(key => key.startsWith(dateToRemove + '_'))
+            .forEach(key => delete p.schedule[key]);
+        }
+      }
+
+      this.updateSelectedScheduleOutput();
+      this.updateRemainingSubjectsForAll();
+
+      if (this.selectedDates.length === 0) this.showTable = false;
+
+      this.swal.fire('Deleted!', 'The selected exam date and its schedules were removed.', 'success');
+    });
   }
 
   loadSwal() {
@@ -398,7 +424,7 @@ export class StudentMappingComponent implements OnInit {
       type: 'info',
       allowOutsideClick: false,
       allowEscapeKey: false,
-      onOpen: function() {
+      onOpen: function () {
         Swal.showLoading();
       }
     });
